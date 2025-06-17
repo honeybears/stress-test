@@ -1,6 +1,5 @@
 import axios, { AxiosRequestConfig, AxiosResponse } from "axios";
 import { v4 as uuidv4 } from "uuid";
-import { createContext, Script } from "vm";
 
 export type IRequestInput = AxiosRequestConfig;
 export type IHandlerOutput = AxiosResponse;
@@ -17,7 +16,7 @@ export interface IHandler {
   getErrorHandler(): IHandler | undefined;
   run(
     input: IHandlerInput | IOutputHandlerInput
-  ): Promise<IHandlerOutput | undefined>;
+  ): Promise<IHandlerOutput | IHandlerOutput[] | undefined>;
 }
 
 export abstract class Handler implements IHandler {
@@ -53,58 +52,96 @@ export abstract class Handler implements IHandler {
     return this.errorHandler;
   }
 
-    public abstract run(
+  public abstract run(
     input: IHandlerInput | IOutputHandlerInput
-  ): Promise<IHandlerOutput | undefined>;
+  ): Promise<IHandlerOutput | IHandlerOutput[] | undefined>;
 }
 
 export interface IOutputHandler extends IHandler {}
 
 export interface IScriptHandler extends IHandler {
-  script: string;
+  script: (input: IHandlerInput) => unknown;
 }
 
 export interface IConditionHandler extends IHandler {
   condition: (input: IHandlerInput) => boolean;
 }
 
-export interface IRequestHandler extends IHandler {}
+export interface IRequestHandler extends IHandler {
+  options?: {
+    concurrency?: number;
+    delay?: number;
+    timer?: NodeJS.Timeout;
+  };
+}
 
 export class RequestHandler extends Handler implements IRequestHandler {
+  public options?: {
+    concurrency?: number;
+    delay?: number;
+    timer: NodeJS.Timeout;
+  };
+
   constructor(
     successHandler?: IHandler,
     failureHandler?: IHandler,
-    errorHandler?: IHandler
+    errorHandler?: IHandler,
+    options?: {
+      concurrency?: number;
+      delay?: number;
+      timer: NodeJS.Timeout;
+    }
   ) {
     super();
     this.successHandler = successHandler;
     this.failureHandler = failureHandler;
     this.errorHandler = errorHandler;
+    this.options = options;
   }
 
-  public async run(input: IHandlerInput): Promise<IHandlerOutput | undefined> {
-    const response = await axios
-      .request(input)
-      .then((res) => {
+  public async run(
+    input: IHandlerInput
+  ): Promise<IHandlerOutput | IHandlerOutput[] | undefined> {
+    if (this.options) {
+      const promises = [];
+      for (let i = 0; i < (this.options.concurrency || 1); i++) {
+        promises.push(axios.request(input));
+      }
+
+      try {
+        const results = await Promise.all(promises);
+        results.forEach((result) => {
+          if (result.status >= 200 && result.status < 300) {
+            this.successHandler?.run(result);
+          }
+          if (result.status >= 400 && result.status < 500) {
+            this.failureHandler?.run(result);
+          }
+        });
+      } catch (error: any) {
+        return this.errorHandler?.run(error);
+      }
+    } else {
+      try {
+        const res = await axios.request(input);
         if (res.status >= 200 && res.status < 300) {
           return this.successHandler?.run(res);
         }
         if (res.status >= 400 && res.status < 500) {
           return this.failureHandler?.run(res);
         }
-      })
-      .catch((err) => {
+      } catch (err: any) {
         return this.errorHandler?.run(err);
-      });
-    return response;
+      }
+    }
   }
 }
 
 export class ScriptHandler extends Handler implements IScriptHandler {
-  public script: string;
+  public script: (input: IHandlerInput) => unknown;
 
   constructor(
-    script: string,
+    script: (input: IHandlerInput) => unknown,
     successHandler?: IHandler,
     failureHandler?: IHandler,
     errorHandler?: IHandler
@@ -116,22 +153,14 @@ export class ScriptHandler extends Handler implements IScriptHandler {
     this.errorHandler = errorHandler;
   }
 
-  public async run(input: IHandlerInput): Promise<IHandlerOutput | undefined> {
-    const context = createContext({
-      input,
-      console,
-      setTimeout,
-      setInterval,
-      clearTimeout,
-      clearInterval,
-    });
-
+  public async run(
+    input: IHandlerInput
+  ): Promise<IHandlerOutput | IHandlerOutput[] | undefined> {
     try {
-      const vmScript = new Script(this.script);
-      const result = vmScript.runInContext(context);
+      const result = this.script(input);
       return this.successHandler?.run(result);
-    } catch (error) {
-      return this.errorHandler?.run(error as any);
+    } catch (error: any) {
+      return this.errorHandler?.run(error);
     }
   }
 }
@@ -152,7 +181,9 @@ export class ConditionHandler extends Handler implements IConditionHandler {
     this.errorHandler = errorHandler;
   }
 
-  public async run(input: IHandlerInput): Promise<IHandlerOutput | undefined> {
+  public async run(
+    input: IHandlerInput
+  ): Promise<IHandlerOutput | IHandlerOutput[] | undefined> {
     try {
       if (this.condition(input)) {
         return this.successHandler?.run(input);
@@ -172,14 +203,29 @@ export class OutputHandler extends Handler implements IOutputHandler {
 
   public async run(
     input: IOutputHandlerInput
-  ): Promise<IHandlerOutput | undefined> {
-    if (input["headers"] && input["status"] || input["body"]) {
+  ): Promise<IHandlerOutput | IHandlerOutput[] | undefined> {
+    if (Array.isArray(input)) {
+      console.log("Parallel execution results:", input.length, "responses");
+      input.forEach((item, index) => {
+        console.log(`--- Response ${index + 1} ---`);
+        if (item && item.data) {
+          console.log("Status:", item.status);
+          console.log("Body:", item.data);
+        } else {
+          console.log("Item:", item);
+        }
+        console.log("--------------------");
+      });
+    } else if (input && input.data) {
+      console.log("--- Single execution result ---");
       console.log("Headers", input.headers);
       console.log("Body", input.data);
       console.log("Status", input.status);
-    }
-    else{
+      console.log("--------------------");
+    } else {
+      console.log("--- Other Input ---");
       console.log("Input", input);
+      console.log("--------------------");
     }
     return input;
   }

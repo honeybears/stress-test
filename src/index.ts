@@ -1,28 +1,22 @@
-import {
-  ConditionHandler,
-  OutputHandler,
-  RequestHandler,
-  ScriptHandler,
-} from "./common/handler";
+import { IHandlerInput, OutputHandler, RequestHandler, ScriptHandler } from "./common/handler";
 
 console.log("Hello, TypeScript!");
 
-const requestHandler = new RequestHandler(
-  new ConditionHandler(
-    (response) => response.data.userId == 1,
-    new ScriptHandler(
-      "console.log('true');  ({...input});",
-      new OutputHandler(),
-      new OutputHandler(),
-      new OutputHandler()
-    ),
-    new ScriptHandler("console.log('false');  ({...input});", new OutputHandler(),new OutputHandler(),new OutputHandler()) // Condition is false
-  ),
+const parallelRequestHandler = new RequestHandler(
+  new ScriptHandler((input: IHandlerInput) => {
+    console.log(input.data);
+    return input;
+  }),
   undefined,
-  new OutputHandler() // Request failed
+  new OutputHandler(),
+  {
+    concurrency: 100,
+    timer: setTimeout(() => {}, 0), 
+  }
 );
 
-requestHandler.run({
+console.log("Running 10 requests in parallel...");
+parallelRequestHandler.run({
   url: "https://jsonplaceholder.typicode.com/posts/1",
   method: "GET",
   headers: {

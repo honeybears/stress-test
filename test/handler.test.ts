@@ -105,7 +105,7 @@ describe("Request Chain Handlers", () => {
 
   describe("ScriptHandler", () => {
     it("should execute script and call successHandler with the result", async () => {
-      const script = "({ ...input, modified: true })";
+      const script = (input: IHandlerInput) => ({ ...input, modified: true });
       const scriptHandler = new ScriptHandler(
         script,
         successHandler,
@@ -123,7 +123,9 @@ describe("Request Chain Handlers", () => {
     });
 
     it("should call errorHandler on script error", async () => {
-      const script = "throw new Error('script error')";
+      const script = (input: IHandlerInput) => {
+        throw new Error("script error");
+      };
       const scriptHandler = new ScriptHandler(
         script,
         successHandler,
@@ -181,7 +183,7 @@ describe("Request Chain Handlers", () => {
 
       // Script handler to modify data
       const scriptHandler = new ScriptHandler(
-        "({...input})",
+        (input: IHandlerInput) => ({ ...input }),
         finalSuccessHandler // The success handler is now finalSuccessHandler
       );
       const scriptHandlerRunSpy = jest.spyOn(scriptHandler, "run");
